@@ -1,5 +1,10 @@
 import { Octokit } from "octokit";
 
+import {
+  RepositoryContentRateLimitError,
+  RepositoryContentUpstreamError,
+  retrieveRepositoryContents,
+} from "./repository-content-retriever.js";
 import { filterRepositoryFiles } from "./repository-file-filter.js";
 import { prioritizeRepositoryFiles } from "./repository-file-prioritizer.js";
 
@@ -163,6 +168,16 @@ export function createGitHubService(options = {}) {
     return normalizeRepositoryTree(data);
   }
 
+  async function getRepositoryBlob(owner, repo, sha) {
+    const response = await octokit.rest.git.getBlob({
+      owner,
+      repo,
+      file_sha: sha,
+    });
+
+    return response.data;
+  }
+
   return {
     getRepository,
 
@@ -175,6 +190,30 @@ export function createGitHubService(options = {}) {
       );
       const filteredFiles = filterRepositoryFiles(entries);
       const prioritizedFiles = prioritizeRepositoryFiles(filteredFiles.files);
+      let retrievedContent;
+
+      try {
+        retrievedContent = await retrieveRepositoryContents(
+          {
+            owner: repository.owner,
+            repo: repository.name,
+            files: prioritizedFiles.selectedFiles,
+            fetchBlob: ({ owner, repo, sha }) =>
+              getRepositoryBlob(owner, repo, sha),
+          },
+          options.contentRetrieval,
+        );
+      } catch (error) {
+        if (error instanceof RepositoryContentRateLimitError) {
+          throw new GitHubRateLimitError();
+        }
+
+        if (error instanceof RepositoryContentUpstreamError) {
+          throw new GitHubUpstreamError();
+        }
+
+        throw error;
+      }
 
       return {
         repository,
@@ -184,6 +223,8 @@ export function createGitHubService(options = {}) {
         prioritizedFiles: prioritizedFiles.files,
         inspectionFiles: prioritizedFiles.selectedFiles,
         prioritizationSummary: prioritizedFiles.summary,
+        repositoryDocuments: retrievedContent.documents,
+        contentRetrievalSummary: retrievedContent.summary,
         structure: {
           ...summarizeRepositoryTree(entries, truncated),
           candidateFileCount: filteredFiles.summary.candidateFiles,

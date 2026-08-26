@@ -48,13 +48,21 @@ const treeData = {
   truncated: false,
 };
 
+const blobContent = 'console.log("hello");\n';
+const blobData = {
+  content: Buffer.from(blobContent).toString("base64"),
+  encoding: "base64",
+};
+
 function createOctokitStub(
   getRepository,
   getTree = async () => ({ data: treeData }),
+  getBlob = async () => ({ data: blobData }),
 ) {
   return {
     rest: {
       git: {
+        getBlob,
         getTree,
       },
       repos: {
@@ -109,6 +117,7 @@ test("GitHub service preserves nullable description and language", async () => {
 
 test("GitHub service requests the recursive default-branch tree using canonical repository names", async () => {
   let treeParameters;
+  let blobParameters;
   const canonicalData = {
     ...githubData,
     owner: { login: "reactjs" },
@@ -122,6 +131,10 @@ test("GitHub service requests the recursive default-branch tree using canonical 
       treeParameters = parameters;
       return { data: treeData };
     },
+    async (parameters) => {
+      blobParameters = parameters;
+      return { data: blobData };
+    },
   );
   const service = createGitHubService({ octokit });
 
@@ -132,6 +145,11 @@ test("GitHub service requests the recursive default-branch tree using canonical 
     repo: "react",
     tree_sha: "stable",
     recursive: "true",
+  });
+  assert.deepEqual(blobParameters, {
+    owner: "reactjs",
+    repo: "react",
+    file_sha: "file-sha",
   });
 });
 
@@ -207,6 +225,25 @@ test("GitHub service normalizes tree entries and summarizes repository structure
     highPriorityFiles: 1,
     mediumPriorityFiles: 0,
     lowPriorityFiles: 0,
+  });
+  assert.deepEqual(analysis.repositoryDocuments, [
+    {
+      path: "src/index.js",
+      sha: "file-sha",
+      size: 1234,
+      category: "entry-point",
+      priority: "high",
+      score: 88,
+      content: blobContent,
+    },
+  ]);
+  assert.deepEqual(analysis.contentRetrievalSummary, {
+    requestedFiles: 1,
+    retrievedFiles: 1,
+    skippedFiles: 0,
+    failedFiles: 0,
+    budgetExcludedFiles: 0,
+    retrievedBytes: Buffer.byteLength(blobContent),
   });
 });
 
@@ -294,6 +331,52 @@ test("GitHub service safely maps tree lookup failures", async () => {
     ),
   });
 
+  await assert.rejects(
+    rateLimitedService.analyzeRepository("facebook", "react"),
+    GitHubRateLimitError,
+  );
+  await assert.rejects(
+    failedService.analyzeRepository("facebook", "react"),
+    GitHubUpstreamError,
+  );
+});
+
+test("GitHub service skips missing blobs and maps hard blob failures safely", async () => {
+  const missingBlobService = createGitHubService({
+    octokit: createOctokitStub(
+      async () => ({ data: githubData }),
+      undefined,
+      async () => {
+        throw { status: 404 };
+      },
+    ),
+  });
+  const rateLimitedService = createGitHubService({
+    octokit: createOctokitStub(
+      async () => ({ data: githubData }),
+      undefined,
+      async () => {
+        throw { status: 429, token: "must-not-leak" };
+      },
+    ),
+  });
+  const failedService = createGitHubService({
+    octokit: createOctokitStub(
+      async () => ({ data: githubData }),
+      undefined,
+      async () => {
+        throw new Error("internal blob failure");
+      },
+    ),
+  });
+
+  const missingBlobAnalysis = await missingBlobService.analyzeRepository(
+    "facebook",
+    "react",
+  );
+
+  assert.deepEqual(missingBlobAnalysis.repositoryDocuments, []);
+  assert.equal(missingBlobAnalysis.contentRetrievalSummary.skippedFiles, 1);
   await assert.rejects(
     rateLimitedService.analyzeRepository("facebook", "react"),
     GitHubRateLimitError,
