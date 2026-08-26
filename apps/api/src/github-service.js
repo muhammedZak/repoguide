@@ -1,5 +1,7 @@
 import { Octokit } from "octokit";
 
+import { filterRepositoryFiles } from "./repository-file-filter.js";
+
 export class GitHubRepositoryNotFoundError extends Error {
   constructor() {
     super("GitHub repository not found");
@@ -170,11 +172,18 @@ export function createGitHubService(options = {}) {
         repository.name,
         repository.defaultBranch,
       );
+      const filteredFiles = filterRepositoryFiles(entries);
 
       return {
         repository,
         tree: entries,
-        structure: summarizeRepositoryTree(entries, truncated),
+        candidateFiles: filteredFiles.files,
+        filterSummary: filteredFiles.summary,
+        structure: {
+          ...summarizeRepositoryTree(entries, truncated),
+          candidateFileCount: filteredFiles.summary.candidateFiles,
+          ignoredFileCount: filteredFiles.summary.ignoredFiles,
+        },
       };
     },
   };

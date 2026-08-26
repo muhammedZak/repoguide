@@ -28,6 +28,8 @@ const structure = {
   directoryCount: 1,
   submoduleCount: 0,
   truncated: false,
+  candidateFileCount: 1,
+  ignoredFileCount: 1,
 };
 
 const githubService = {
@@ -55,6 +57,8 @@ const githubService = {
       repository: normalizedRepository,
       structure,
       tree: [{ path: "internal-only.js" }],
+      candidateFiles: [{ path: "internal-candidate.js" }],
+      filterSummary: { candidateFiles: 1, ignoredFiles: 1 },
     };
   },
 };
@@ -110,6 +114,8 @@ test("POST /api/repos/analyze returns repository metadata and its structure summ
   assert.equal(result.status, 200);
   assert.deepEqual(result.body, { repository, structure });
   assert.equal("tree" in result.body, false);
+  assert.equal("candidateFiles" in result.body, false);
+  assert.equal("filterSummary" in result.body, false);
 });
 
 test("POST /api/repos/analyze accepts a trailing slash", async () => {
