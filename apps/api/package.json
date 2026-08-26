@@ -1,0 +1,16 @@
+{
+  "name": "@repoguide/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --watch src/server.js",
+    "start": "node src/server.js",
+    "lint": "eslint src test eslint.config.js",
+    "test": "node --test",
+    "build": "node --check src/app.js && node --check src/server.js"
+  },
+  "dependencies": {
+    "express": "^5.2.1"
+  }
+}
