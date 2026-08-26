@@ -43,9 +43,10 @@ export function createApp({ githubService = createGitHubService() } = {}) {
 
     try {
       const { owner, repo } = parseGitHubRepositoryUrl(repoUrl.trim());
-      const repository = await githubService.getRepository(owner, repo);
+      const { repository, structure } =
+        await githubService.analyzeRepository(owner, repo);
 
-      response.status(200).json({ repository });
+      response.status(200).json({ repository, structure });
     } catch (error) {
       if (error instanceof GitHubRepositoryUrlError) {
         response.status(400).json({ error: error.message });

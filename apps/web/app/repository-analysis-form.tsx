@@ -25,6 +25,14 @@ type RepositoryMetadata = {
   htmlUrl: string;
 };
 
+type RepositoryStructure = {
+  totalEntries: number;
+  fileCount: number;
+  directoryCount: number;
+  submoduleCount: number;
+  truncated: boolean;
+};
+
 type AnalysisFeedback =
   | {
       message: string;
@@ -32,12 +40,14 @@ type AnalysisFeedback =
     }
   | {
       repository: RepositoryMetadata;
+      structure: RepositoryStructure;
       type: "success";
     };
 
 type AnalyzeResponse = {
   error?: unknown;
   repository?: unknown;
+  structure?: unknown;
 };
 
 const initialValues: FormValues = {
@@ -118,6 +128,29 @@ function isRepositoryMetadata(value: unknown): value is RepositoryMetadata {
   );
 }
 
+function isRepositoryStructure(value: unknown): value is RepositoryStructure {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const structure = value as Partial<RepositoryStructure>;
+
+  return (
+    typeof structure.totalEntries === "number" &&
+    typeof structure.fileCount === "number" &&
+    typeof structure.directoryCount === "number" &&
+    typeof structure.submoduleCount === "number" &&
+    typeof structure.truncated === "boolean"
+  );
+}
+
+function formatCompactNumber(value: number) {
+  return new Intl.NumberFormat("en-US", {
+    maximumFractionDigits: 1,
+    notation: "compact",
+  }).format(value);
+}
+
 export function RepositoryAnalysisForm() {
   const [values, setValues] = useState(initialValues);
   const [errors, setErrors] = useState<FormErrors>({});
@@ -165,12 +198,16 @@ export function RepositoryAnalysisForm() {
         );
       }
 
-      if (!isRepositoryMetadata(result.repository)) {
+      if (
+        !isRepositoryMetadata(result.repository) ||
+        !isRepositoryStructure(result.structure)
+      ) {
         throw new Error("The analysis service returned an unexpected response.");
       }
 
       setFeedback({
         repository: result.repository,
+        structure: result.structure,
         type: "success",
       });
     } catch (error) {
@@ -386,10 +423,35 @@ export function RepositoryAnalysisForm() {
               <div>
                 <dt className="text-text-muted">Stars</dt>
                 <dd className="mt-1 font-medium text-text-primary">
-                  {feedback.repository.stars.toLocaleString("en-US")}
+                  {formatCompactNumber(feedback.repository.stars)}
                 </dd>
               </div>
             </dl>
+            <div className="mt-5 border-t border-success/20 pt-4">
+              <p className="font-medium text-text-primary">
+                Repository structure
+              </p>
+              <dl className="mt-3 grid grid-cols-2 gap-4">
+                <div>
+                  <dt className="text-text-muted">Files</dt>
+                  <dd className="mt-1 font-medium text-text-primary">
+                    {feedback.structure.fileCount.toLocaleString("en-US")}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-text-muted">Directories</dt>
+                  <dd className="mt-1 font-medium text-text-primary">
+                    {feedback.structure.directoryCount.toLocaleString("en-US")}
+                  </dd>
+                </div>
+              </dl>
+              {feedback.structure.truncated ? (
+                <p className="mt-3 leading-6 text-text-secondary">
+                  GitHub returned a partial repository tree, so these counts may
+                  be incomplete.
+                </p>
+              ) : null}
+            </div>
           </div>
         ) : null}
 

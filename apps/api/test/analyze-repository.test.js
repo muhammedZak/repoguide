@@ -22,8 +22,16 @@ const repository = {
   htmlUrl: "https://github.com/facebook/react",
 };
 
+const structure = {
+  totalEntries: 3,
+  fileCount: 2,
+  directoryCount: 1,
+  submoduleCount: 0,
+  truncated: false,
+};
+
 const githubService = {
-  async getRepository(owner, repo) {
+  async analyzeRepository(owner, repo) {
     if (repo === "missing") {
       throw new GitHubRepositoryNotFoundError();
     }
@@ -36,7 +44,18 @@ const githubService = {
       throw new GitHubUpstreamError();
     }
 
-    return { ...repository, owner, name: repo, fullName: `${owner}/${repo}` };
+    const normalizedRepository = {
+      ...repository,
+      owner,
+      name: repo,
+      fullName: `${owner}/${repo}`,
+    };
+
+    return {
+      repository: normalizedRepository,
+      structure,
+      tree: [{ path: "internal-only.js" }],
+    };
   },
 };
 
@@ -83,13 +102,14 @@ async function analyze(body) {
   };
 }
 
-test("POST /api/repos/analyze returns normalized repository metadata", async () => {
+test("POST /api/repos/analyze returns repository metadata and its structure summary", async () => {
   const result = await analyze({
     repoUrl: "https://github.com/facebook/react",
   });
 
   assert.equal(result.status, 200);
-  assert.deepEqual(result.body, { repository });
+  assert.deepEqual(result.body, { repository, structure });
+  assert.equal("tree" in result.body, false);
 });
 
 test("POST /api/repos/analyze accepts a trailing slash", async () => {
@@ -98,7 +118,7 @@ test("POST /api/repos/analyze accepts a trailing slash", async () => {
   });
 
   assert.equal(result.status, 200);
-  assert.deepEqual(result.body, { repository });
+  assert.deepEqual(result.body, { repository, structure });
 });
 
 test("POST /api/repos/analyze rejects invalid repository URLs before lookup", async () => {

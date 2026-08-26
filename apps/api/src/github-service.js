@@ -74,6 +74,48 @@ function mapGitHubError(error) {
   return new GitHubUpstreamError();
 }
 
+function normalizeRepositoryTree(data) {
+  if (!Array.isArray(data?.tree) || typeof data?.truncated !== "boolean") {
+    throw new GitHubUpstreamError();
+  }
+
+  const entries = data.tree.map((entry) => {
+    if (
+      typeof entry?.path !== "string" ||
+      !["blob", "tree", "commit"].includes(entry?.type) ||
+      typeof entry?.mode !== "string" ||
+      typeof entry?.sha !== "string" ||
+      !(
+        typeof entry?.size === "number" ||
+        entry?.size === undefined ||
+        entry?.size === null
+      )
+    ) {
+      throw new GitHubUpstreamError();
+    }
+
+    return {
+      path: entry.path,
+      type: entry.type,
+      mode: entry.mode,
+      sha: entry.sha,
+      size: typeof entry.size === "number" ? entry.size : null,
+    };
+  });
+
+  return { entries, truncated: data.truncated };
+}
+
+function summarizeRepositoryTree(entries, truncated) {
+  return {
+    totalEntries: entries.length,
+    fileCount: entries.filter((entry) => entry.type === "blob").length,
+    directoryCount: entries.filter((entry) => entry.type === "tree").length,
+    submoduleCount: entries.filter((entry) => entry.type === "commit").length,
+    truncated,
+  };
+}
+
 export function createGitHubService(options = {}) {
   const token = options.token ?? process.env.GITHUB_TOKEN;
   const octokit =
@@ -83,23 +125,57 @@ export function createGitHubService(options = {}) {
       userAgent: "RepoGuide/0.1.0",
     });
 
+  async function getRepository(owner, repo) {
+    let data;
+
+    try {
+      const response = await octokit.rest.repos.get({ owner, repo });
+      data = response.data;
+    } catch (error) {
+      throw mapGitHubError(error);
+    }
+
+    if (data.private || data.visibility === "private") {
+      throw new GitHubRepositoryNotFoundError();
+    }
+
+    return normalizeRepository(data);
+  }
+
+  async function getRepositoryTree(owner, repo, defaultBranch) {
+    let data;
+
+    try {
+      const response = await octokit.rest.git.getTree({
+        owner,
+        repo,
+        tree_sha: defaultBranch,
+        recursive: "true",
+      });
+      data = response.data;
+    } catch (error) {
+      throw mapGitHubError(error);
+    }
+
+    return normalizeRepositoryTree(data);
+  }
+
   return {
-    async getRepository(owner, repo) {
-      let data;
+    getRepository,
 
-      try {
-        const response = await octokit.rest.repos.get({ owner, repo });
-        data = response.data;
-      } catch (error) {
-        throw mapGitHubError(error);
-      }
+    async analyzeRepository(owner, repo) {
+      const repository = await getRepository(owner, repo);
+      const { entries, truncated } = await getRepositoryTree(
+        repository.owner,
+        repository.name,
+        repository.defaultBranch,
+      );
 
-      if (data.private || data.visibility === "private") {
-        throw new GitHubRepositoryNotFoundError();
-      }
-
-      return normalizeRepository(data);
+      return {
+        repository,
+        tree: entries,
+        structure: summarizeRepositoryTree(entries, truncated),
+      };
     },
   };
 }
-

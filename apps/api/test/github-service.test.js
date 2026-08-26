@@ -23,9 +23,40 @@ const githubData = {
   html_url: "https://github.com/facebook/react",
 };
 
-function createOctokitStub(getRepository) {
+const treeData = {
+  tree: [
+    {
+      path: "src",
+      type: "tree",
+      mode: "040000",
+      sha: "directory-sha",
+    },
+    {
+      path: "src/index.js",
+      type: "blob",
+      mode: "100644",
+      sha: "file-sha",
+      size: 1234,
+    },
+    {
+      path: "vendor/example",
+      type: "commit",
+      mode: "160000",
+      sha: "submodule-sha",
+    },
+  ],
+  truncated: false,
+};
+
+function createOctokitStub(
+  getRepository,
+  getTree = async () => ({ data: treeData }),
+) {
   return {
     rest: {
+      git: {
+        getTree,
+      },
       repos: {
         get: getRepository,
       },
@@ -76,6 +107,86 @@ test("GitHub service preserves nullable description and language", async () => {
   assert.equal(repository.language, null);
 });
 
+test("GitHub service requests the recursive default-branch tree using canonical repository names", async () => {
+  let treeParameters;
+  const canonicalData = {
+    ...githubData,
+    owner: { login: "reactjs" },
+    name: "react",
+    full_name: "reactjs/react",
+    default_branch: "stable",
+  };
+  const octokit = createOctokitStub(
+    async () => ({ data: canonicalData }),
+    async (parameters) => {
+      treeParameters = parameters;
+      return { data: treeData };
+    },
+  );
+  const service = createGitHubService({ octokit });
+
+  await service.analyzeRepository("facebook", "react");
+
+  assert.deepEqual(treeParameters, {
+    owner: "reactjs",
+    repo: "react",
+    tree_sha: "stable",
+    recursive: "true",
+  });
+});
+
+test("GitHub service normalizes tree entries and summarizes repository structure", async () => {
+  const service = createGitHubService({
+    octokit: createOctokitStub(async () => ({ data: githubData })),
+  });
+
+  const analysis = await service.analyzeRepository("facebook", "react");
+
+  assert.deepEqual(analysis.tree, [
+    {
+      path: "src",
+      type: "tree",
+      mode: "040000",
+      sha: "directory-sha",
+      size: null,
+    },
+    {
+      path: "src/index.js",
+      type: "blob",
+      mode: "100644",
+      sha: "file-sha",
+      size: 1234,
+    },
+    {
+      path: "vendor/example",
+      type: "commit",
+      mode: "160000",
+      sha: "submodule-sha",
+      size: null,
+    },
+  ]);
+  assert.deepEqual(analysis.structure, {
+    totalEntries: 3,
+    fileCount: 1,
+    directoryCount: 1,
+    submoduleCount: 1,
+    truncated: false,
+  });
+});
+
+test("GitHub service exposes recursive tree truncation in the structure summary", async () => {
+  const service = createGitHubService({
+    octokit: createOctokitStub(
+      async () => ({ data: githubData }),
+      async () => ({ data: { ...treeData, truncated: true } }),
+    ),
+  });
+
+  const analysis = await service.analyzeRepository("facebook", "react");
+
+  assert.equal(analysis.structure.truncated, true);
+});
+
 test("GitHub service maps missing or private repositories to not found", async () => {
   const missingService = createGitHubService({
     octokit: createOctokitStub(async () => {
@@ -122,6 +233,34 @@ test("GitHub service maps unexpected failures to a safe upstream error", async (
 
   await assert.rejects(
     service.getRepository("facebook", "react"),
+    GitHubUpstreamError,
+  );
+});
+
+test("GitHub service safely maps tree lookup failures", async () => {
+  const rateLimitedService = createGitHubService({
+    octokit: createOctokitStub(
+      async () => ({ data: githubData }),
+      async () => {
+        throw { status: 403, token: "must-not-leak" };
+      },
+    ),
+  });
+  const failedService = createGitHubService({
+    octokit: createOctokitStub(
+      async () => ({ data: githubData }),
+      async () => {
+        throw new Error("internal GitHub tree details");
+      },
+    ),
+  });
+
+  await assert.rejects(
+    rateLimitedService.analyzeRepository("facebook", "react"),
+    GitHubRateLimitError,
+  );
+  await assert.rejects(
+    failedService.analyzeRepository("facebook", "react"),
     GitHubUpstreamError,
   );
 });
