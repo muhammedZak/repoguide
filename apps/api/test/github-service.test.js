@@ -190,6 +190,24 @@ test("GitHub service normalizes tree entries and summarizes repository structure
     ignoredGenerated: 0,
     ignoredOversized: 0,
   });
+  assert.deepEqual(analysis.prioritizedFiles, [
+    {
+      path: "src/index.js",
+      sha: "file-sha",
+      size: 1234,
+      category: "entry-point",
+      priority: "high",
+      score: 88,
+    },
+  ]);
+  assert.deepEqual(analysis.inspectionFiles, analysis.prioritizedFiles);
+  assert.deepEqual(analysis.prioritizationSummary, {
+    totalCandidateFiles: 1,
+    selectedFiles: 1,
+    highPriorityFiles: 1,
+    mediumPriorityFiles: 0,
+    lowPriorityFiles: 0,
+  });
 });
 
 test("GitHub service exposes recursive tree truncation in the structure summary", async () => {
@@ -205,6 +223,7 @@ test("GitHub service exposes recursive tree truncation in the structure summary"
   assert.equal(analysis.structure.truncated, true);
   assert.equal(analysis.structure.candidateFileCount, 1);
   assert.equal(analysis.structure.ignoredFileCount, 0);
+  assert.equal(analysis.inspectionFiles.length, 1);
 });
 
 test("GitHub service maps missing or private repositories to not found", async () => {

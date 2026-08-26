@@ -59,6 +59,9 @@ const githubService = {
       tree: [{ path: "internal-only.js" }],
       candidateFiles: [{ path: "internal-candidate.js" }],
       filterSummary: { candidateFiles: 1, ignoredFiles: 1 },
+      prioritizedFiles: [{ path: "internal-prioritized.js", score: 80 }],
+      inspectionFiles: [{ path: "internal-inspection.js", score: 80 }],
+      prioritizationSummary: { totalCandidateFiles: 1, selectedFiles: 1 },
     };
   },
 };
@@ -116,6 +119,9 @@ test("POST /api/repos/analyze returns repository metadata and its structure summ
   assert.equal("tree" in result.body, false);
   assert.equal("candidateFiles" in result.body, false);
   assert.equal("filterSummary" in result.body, false);
+  assert.equal("prioritizedFiles" in result.body, false);
+  assert.equal("inspectionFiles" in result.body, false);
+  assert.equal("prioritizationSummary" in result.body, false);
 });
 
 test("POST /api/repos/analyze accepts a trailing slash", async () => {

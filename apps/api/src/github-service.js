@@ -1,6 +1,7 @@
 import { Octokit } from "octokit";
 
 import { filterRepositoryFiles } from "./repository-file-filter.js";
+import { prioritizeRepositoryFiles } from "./repository-file-prioritizer.js";
 
 export class GitHubRepositoryNotFoundError extends Error {
   constructor() {
@@ -173,12 +174,16 @@ export function createGitHubService(options = {}) {
         repository.defaultBranch,
       );
       const filteredFiles = filterRepositoryFiles(entries);
+      const prioritizedFiles = prioritizeRepositoryFiles(filteredFiles.files);
 
       return {
         repository,
         tree: entries,
         candidateFiles: filteredFiles.files,
         filterSummary: filteredFiles.summary,
+        prioritizedFiles: prioritizedFiles.files,
+        inspectionFiles: prioritizedFiles.selectedFiles,
+        prioritizationSummary: prioritizedFiles.summary,
         structure: {
           ...summarizeRepositoryTree(entries, truncated),
           candidateFileCount: filteredFiles.summary.candidateFiles,
