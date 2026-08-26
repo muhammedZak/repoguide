@@ -14,6 +14,7 @@
   --primary-foreground: #ffffff;
   --primary-muted: #ccfbf1;
   --danger: #b42318;
+  --danger-muted: #fef3f2;
   --success: #067647;
   --success-muted: #ecfdf3;
 }
@@ -32,6 +33,7 @@
   --color-primary-foreground: var(--primary-foreground);
   --color-primary-muted: var(--primary-muted);
   --color-danger: var(--danger);
+  --color-danger-muted: var(--danger-muted);
   --color-success: var(--success);
   --color-success-muted: var(--success-muted);
 }

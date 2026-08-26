@@ -11,6 +11,17 @@ type FormValues = {
 
 type FormErrors = Partial<Record<keyof FormValues, string>>;
 
+type AnalysisFeedback = {
+  message: string;
+  type: "error" | "success";
+};
+
+type AnalyzeResponse = {
+  error?: unknown;
+  owner?: unknown;
+  repo?: unknown;
+};
+
 const initialValues: FormValues = {
   repositoryUrl: "",
   interviewDate: "",
@@ -69,7 +80,8 @@ function validate(values: FormValues): FormErrors {
 export function RepositoryAnalysisForm() {
   const [values, setValues] = useState(initialValues);
   const [errors, setErrors] = useState<FormErrors>({});
-  const [message, setMessage] = useState<string | null>(null);
+  const [feedback, setFeedback] = useState<AnalysisFeedback | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   function updateField<Field extends keyof FormValues>(
     field: Field,
@@ -77,23 +89,60 @@ export function RepositoryAnalysisForm() {
   ) {
     setValues((currentValues) => ({ ...currentValues, [field]: value }));
     setErrors((currentErrors) => ({ ...currentErrors, [field]: undefined }));
-    setMessage(null);
+    setFeedback(null);
   }
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
     const nextErrors = validate(values);
     setErrors(nextErrors);
 
     if (Object.keys(nextErrors).length > 0) {
-      setMessage(null);
+      setFeedback(null);
       return;
     }
 
-    setMessage(
-      "Your details look good. Repository analysis will be connected in the next step.",
-    );
+    setIsSubmitting(true);
+    setFeedback(null);
+
+    try {
+      const response = await fetch("/api/repos/analyze", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ repoUrl: values.repositoryUrl.trim() }),
+      });
+      const result = (await response
+        .json()
+        .catch(() => ({}))) as AnalyzeResponse;
+
+      if (!response.ok) {
+        throw new Error(
+          typeof result.error === "string"
+            ? result.error
+            : "The repository URL could not be analyzed.",
+        );
+      }
+
+      if (typeof result.owner !== "string" || typeof result.repo !== "string") {
+        throw new Error("The analysis service returned an unexpected response.");
+      }
+
+      setFeedback({
+        message: `Repository recognized: ${result.owner}/${result.repo}.`,
+        type: "success",
+      });
+    } catch (error) {
+      setFeedback({
+        message:
+          error instanceof Error
+            ? error.message
+            : "The analysis service could not be reached. Try again.",
+        type: "error",
+      });
+    } finally {
+      setIsSubmitting(false);
+    }
   }
 
   function fieldClasses(hasError: boolean) {
@@ -257,18 +306,24 @@ export function RepositoryAnalysisForm() {
         </fieldset>
 
         <button
+          aria-busy={isSubmitting}
           className="min-h-12 w-full rounded-lg bg-primary px-5 py-3 font-semibold text-primary-foreground transition hover:bg-primary-hover focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-primary/20 disabled:cursor-not-allowed disabled:opacity-60"
+          disabled={isSubmitting}
           type="submit"
         >
-          Analyze Repository
+          {isSubmitting ? "Analyzing..." : "Analyze Repository"}
         </button>
 
-        {message ? (
+        {feedback ? (
           <p
-            className="rounded-lg border border-success/20 bg-success-muted px-4 py-3 text-sm leading-6 text-success"
-            role="status"
+            className={`rounded-lg border px-4 py-3 text-sm leading-6 ${
+              feedback.type === "success"
+                ? "border-success/20 bg-success-muted text-success"
+                : "border-danger/20 bg-danger-muted text-danger"
+            }`}
+            role={feedback.type === "error" ? "alert" : "status"}
           >
-            {message}
+            {feedback.message}
           </p>
         ) : null}
       </form>
