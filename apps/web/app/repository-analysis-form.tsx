@@ -11,15 +11,33 @@ type FormValues = {
 
 type FormErrors = Partial<Record<keyof FormValues, string>>;
 
-type AnalysisFeedback = {
-  message: string;
-  type: "error" | "success";
+type RepositoryMetadata = {
+  owner: string;
+  name: string;
+  fullName: string;
+  description: string | null;
+  defaultBranch: string;
+  language: string | null;
+  stars: number;
+  forks: number;
+  openIssues: number;
+  visibility: string;
+  htmlUrl: string;
 };
+
+type AnalysisFeedback =
+  | {
+      message: string;
+      type: "error";
+    }
+  | {
+      repository: RepositoryMetadata;
+      type: "success";
+    };
 
 type AnalyzeResponse = {
   error?: unknown;
-  owner?: unknown;
-  repo?: unknown;
+  repository?: unknown;
 };
 
 const initialValues: FormValues = {
@@ -77,6 +95,29 @@ function validate(values: FormValues): FormErrors {
   return errors;
 }
 
+function isRepositoryMetadata(value: unknown): value is RepositoryMetadata {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const repository = value as Partial<RepositoryMetadata>;
+
+  return (
+    typeof repository.owner === "string" &&
+    typeof repository.name === "string" &&
+    typeof repository.fullName === "string" &&
+    (typeof repository.description === "string" ||
+      repository.description === null) &&
+    typeof repository.defaultBranch === "string" &&
+    (typeof repository.language === "string" || repository.language === null) &&
+    typeof repository.stars === "number" &&
+    typeof repository.forks === "number" &&
+    typeof repository.openIssues === "number" &&
+    typeof repository.visibility === "string" &&
+    typeof repository.htmlUrl === "string"
+  );
+}
+
 export function RepositoryAnalysisForm() {
   const [values, setValues] = useState(initialValues);
   const [errors, setErrors] = useState<FormErrors>({});
@@ -124,12 +165,12 @@ export function RepositoryAnalysisForm() {
         );
       }
 
-      if (typeof result.owner !== "string" || typeof result.repo !== "string") {
+      if (!isRepositoryMetadata(result.repository)) {
         throw new Error("The analysis service returned an unexpected response.");
       }
 
       setFeedback({
-        message: `Repository recognized: ${result.owner}/${result.repo}.`,
+        repository: result.repository,
         type: "success",
       });
     } catch (error) {
@@ -314,14 +355,48 @@ export function RepositoryAnalysisForm() {
           {isSubmitting ? "Analyzing..." : "Analyze Repository"}
         </button>
 
-        {feedback ? (
+        {feedback?.type === "success" ? (
+          <div
+            className="rounded-lg border border-success/20 bg-success-muted px-4 py-4 text-sm text-text-secondary"
+            role="status"
+          >
+            <p className="font-semibold text-success">
+              {feedback.repository.fullName}
+            </p>
+            {feedback.repository.description ? (
+              <p className="mt-2 leading-6">
+                {feedback.repository.description}
+              </p>
+            ) : null}
+            <dl className="mt-4 grid grid-cols-2 gap-4">
+              {feedback.repository.language ? (
+                <div>
+                  <dt className="text-text-muted">Language</dt>
+                  <dd className="mt-1 font-medium text-text-primary">
+                    {feedback.repository.language}
+                  </dd>
+                </div>
+              ) : null}
+              <div>
+                <dt className="text-text-muted">Default branch</dt>
+                <dd className="mt-1 font-medium text-text-primary">
+                  {feedback.repository.defaultBranch}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-text-muted">Stars</dt>
+                <dd className="mt-1 font-medium text-text-primary">
+                  {feedback.repository.stars.toLocaleString("en-US")}
+                </dd>
+              </div>
+            </dl>
+          </div>
+        ) : null}
+
+        {feedback?.type === "error" ? (
           <p
-            className={`rounded-lg border px-4 py-3 text-sm leading-6 ${
-              feedback.type === "success"
-                ? "border-success/20 bg-success-muted text-success"
-                : "border-danger/20 bg-danger-muted text-danger"
-            }`}
-            role={feedback.type === "error" ? "alert" : "status"}
+            className="rounded-lg border border-danger/20 bg-danger-muted px-4 py-3 text-sm leading-6 text-danger"
+            role="alert"
           >
             {feedback.message}
           </p>

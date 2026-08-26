@@ -8,9 +8,10 @@
     "start": "node src/server.js",
     "lint": "eslint src test eslint.config.js",
     "test": "node --test",
-    "build": "node --check src/github-repository-url.js && node --check src/app.js && node --check src/server.js"
+    "build": "node --check src/github-repository-url.js && node --check src/github-service.js && node --check src/app.js && node --check src/server.js"
   },
   "dependencies": {
-    "express": "^5.2.1"
+    "express": "^5.2.1",
+    "octokit": "^5.0.5"
   }
 }

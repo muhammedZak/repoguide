@@ -1,11 +1,17 @@
 import express from "express";
 
 import {
+  createGitHubService,
+  GitHubRateLimitError,
+  GitHubRepositoryNotFoundError,
+  GitHubUpstreamError,
+} from "./github-service.js";
+import {
   GitHubRepositoryUrlError,
   parseGitHubRepositoryUrl,
 } from "./github-repository-url.js";
 
-export function createApp() {
+export function createApp({ githubService = createGitHubService() } = {}) {
   const app = express();
 
   app.disable("x-powered-by");
@@ -18,7 +24,7 @@ export function createApp() {
     });
   });
 
-  app.post("/api/repos/analyze", (request, response, next) => {
+  app.post("/api/repos/analyze", async (request, response, next) => {
     const repoUrl = request.body?.repoUrl;
 
     if (
@@ -36,10 +42,34 @@ export function createApp() {
     }
 
     try {
-      response.status(200).json(parseGitHubRepositoryUrl(repoUrl.trim()));
+      const { owner, repo } = parseGitHubRepositoryUrl(repoUrl.trim());
+      const repository = await githubService.getRepository(owner, repo);
+
+      response.status(200).json({ repository });
     } catch (error) {
       if (error instanceof GitHubRepositoryUrlError) {
         response.status(400).json({ error: error.message });
+        return;
+      }
+
+      if (error instanceof GitHubRepositoryNotFoundError) {
+        response.status(404).json({
+          error: "Repository not found or is not publicly accessible.",
+        });
+        return;
+      }
+
+      if (error instanceof GitHubRateLimitError) {
+        response.status(503).json({
+          error: "GitHub is temporarily rate limited. Try again later.",
+        });
+        return;
+      }
+
+      if (error instanceof GitHubUpstreamError) {
+        response.status(502).json({
+          error: "GitHub could not be reached. Try again later.",
+        });
         return;
       }
 
