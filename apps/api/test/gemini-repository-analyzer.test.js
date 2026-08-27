@@ -271,59 +271,155 @@ test("removes fabricated evidence paths and unknown learning-order IDs", async (
   assert.deepEqual(result.recommendedLearningOrder, ["application-flow"]);
 });
 
-test("rejects malformed Gemini output with a safe provider error", async () => {
+test("recovers from missing response text with one additional generation", async () => {
   let attempts = 0;
   const diagnostics = [];
   const analyzer = createGeminiRepositoryAnalyzer({
     client: fakeClient(async () => {
       attempts += 1;
-      return { text: "not json" };
+      return attempts === 1
+        ? { text: "" }
+        : { text: JSON.stringify(validUnderstanding()) };
     }),
     model: "test-model",
     onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
   });
 
-  await assert.rejects(
-    analyzer.analyzeRepository({ context: "", documentPaths: [] }),
-    GeminiMalformedResponseError,
-  );
-  assert.equal(attempts, 1);
+  const result = await analyzer.analyzeRepository({
+    context: "safe evidence",
+    documentPaths: ["src/main.js"],
+  });
+
+  assert.equal(result.projectSummary, validUnderstanding().projectSummary);
+  assert.equal(attempts, 2);
   assert.deepEqual(diagnostics, [
     {
       provider: "gemini",
       operation: "repository-understanding",
       category: "malformed-structured-output",
       attempt: 1,
+      recoveryAttempt: 0,
     },
   ]);
 });
 
-test("records application validation separately without retrying", async () => {
+test("recovers from invalid JSON with one additional generation", async () => {
+  let attempts = 0;
+  const analyzer = createGeminiRepositoryAnalyzer({
+    client: fakeClient(async () => {
+      attempts += 1;
+      return attempts === 1
+        ? { text: "not json" }
+        : { text: JSON.stringify(validUnderstanding()) };
+    }),
+    model: "test-model",
+  });
+
+  const result = await analyzer.analyzeRepository({
+    context: "safe evidence",
+    documentPaths: ["src/main.js"],
+  });
+
+  assert.equal(result.projectSummary, validUnderstanding().projectSummary);
+  assert.equal(attempts, 2);
+});
+
+test("recovers from application-validation failure and records its category", async () => {
   let attempts = 0;
   const diagnostics = [];
   const analyzer = createGeminiRepositoryAnalyzer({
     client: fakeClient(async () => {
       attempts += 1;
-      return { text: JSON.stringify({ projectSummary: "Incomplete" }) };
+      return attempts === 1
+        ? { text: JSON.stringify({ projectSummary: "Incomplete" }) }
+        : { text: JSON.stringify(validUnderstanding()) };
     }),
     model: "test-model",
     onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
   });
 
-  await assert.rejects(
-    analyzer.analyzeRepository({ context: "", documentPaths: [] }),
-    GeminiMalformedResponseError,
-  );
+  const result = await analyzer.analyzeRepository({
+    context: "safe evidence",
+    documentPaths: ["src/main.js"],
+  });
 
-  assert.equal(attempts, 1);
+  assert.equal(result.projectSummary, validUnderstanding().projectSummary);
+  assert.equal(attempts, 2);
   assert.deepEqual(diagnostics, [
     {
       provider: "gemini",
       operation: "repository-understanding",
       category: "application-validation",
       attempt: 1,
+      recoveryAttempt: 0,
     },
   ]);
+});
+
+test("caps malformed structured-output recovery at one additional generation", async () => {
+  let attempts = 0;
+  const diagnostics = [];
+  const privateContext = "private repository source that must not be diagnosed";
+  const analyzer = createGeminiRepositoryAnalyzer({
+    client: fakeClient(async () => {
+      attempts += 1;
+      return attempts < 3
+        ? { text: "not json" }
+        : { text: JSON.stringify(validUnderstanding()) };
+    }),
+    model: "test-model",
+    onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
+  });
+
+  await assert.rejects(
+    analyzer.analyzeRepository({
+      context: privateContext,
+      documentPaths: ["src/main.js"],
+    }),
+    (error) => {
+      assert.ok(error instanceof GeminiMalformedResponseError);
+      assert.deepEqual(error.diagnostic, diagnostics[1]);
+      return true;
+    },
+  );
+
+  assert.equal(attempts, 2);
+  assert.deepEqual(diagnostics, [
+    {
+      provider: "gemini",
+      operation: "repository-understanding",
+      category: "malformed-structured-output",
+      attempt: 1,
+      recoveryAttempt: 0,
+    },
+    {
+      provider: "gemini",
+      operation: "repository-understanding",
+      category: "malformed-structured-output",
+      attempt: 2,
+      recoveryAttempt: 1,
+    },
+  ]);
+  assert.equal(JSON.stringify(diagnostics).includes(privateContext), false);
+});
+
+test("does not multiply transport retries during malformed-output recovery", async () => {
+  let attempts = 0;
+  const analyzer = createGeminiRepositoryAnalyzer({
+    client: fakeClient(async () => {
+      attempts += 1;
+      if (attempts === 1) return { text: "not json" };
+      throw { status: 429 };
+    }),
+    model: "test-model",
+    sleep: async () => {},
+  });
+
+  await assert.rejects(
+    analyzer.analyzeRepository({ context: "", documentPaths: [] }),
+    GeminiRateLimitError,
+  );
+  assert.equal(attempts, 2);
 });
 
 test("repository understanding returns normally after a transient retry", async () => {
@@ -351,14 +447,16 @@ test("repository understanding returns normally after a transient retry", async 
 });
 
 test("maps Gemini authentication, rate-limit, and upstream failures safely", async () => {
-  for (const [status, ErrorType] of [
-    [401, GeminiAuthenticationError],
-    [403, GeminiAuthenticationError],
-    [429, GeminiRateLimitError],
-    [500, GeminiUpstreamError],
+  for (const [status, ErrorType, expectedAttempts] of [
+    [401, GeminiAuthenticationError, 1],
+    [403, GeminiAuthenticationError, 1],
+    [429, GeminiRateLimitError, 3],
+    [500, GeminiUpstreamError, 3],
   ]) {
+    let attempts = 0;
     const analyzer = createGeminiRepositoryAnalyzer({
       client: fakeClient(async () => {
+        attempts += 1;
         throw { status, headers: { authorization: "must-not-leak" } };
       }),
       model: "test-model",
@@ -369,12 +467,15 @@ test("maps Gemini authentication, rate-limit, and upstream failures safely", asy
       analyzer.analyzeRepository({ context: "", documentPaths: [] }),
       ErrorType,
     );
+    assert.equal(attempts, expectedAttempts);
   }
 });
 
 test("maps an invalid Gemini API key response as authentication failure", async () => {
+  let attempts = 0;
   const analyzer = createGeminiRepositoryAnalyzer({
     client: fakeClient(async () => {
+      attempts += 1;
       throw { status: 400, message: "API key not valid" };
     }),
     model: "test-model",
@@ -384,4 +485,5 @@ test("maps an invalid Gemini API key response as authentication failure", async 
     analyzer.analyzeRepository({ context: "", documentPaths: [] }),
     GeminiAuthenticationError,
   );
+  assert.equal(attempts, 1);
 });
