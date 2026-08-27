@@ -245,6 +245,36 @@ test("GitHub service normalizes tree entries and summarizes repository structure
     budgetExcludedFiles: 0,
     retrievedBytes: Buffer.byteLength(blobContent),
   });
+  assert.deepEqual(analysis.repositoryManifest, {
+    repository: {
+      fullName: "facebook/react",
+      primaryLanguage: "JavaScript",
+    },
+    packageManifests: [],
+    dependencies: [],
+    technologies: [],
+    configurationFiles: [],
+    entryPointCandidates: [
+      {
+        path: "src/index.js",
+        reason: "deterministic filename/path classification",
+      },
+    ],
+    documentationFiles: [],
+    workspaceEvidence: { declared: false, declarations: [] },
+  });
+  assert.deepEqual(analysis.repositoryManifestSummary, {
+    documentsAnalyzed: 1,
+    packageManifestCount: 0,
+    packageManifestsParsed: 0,
+    packageManifestParseFailures: 0,
+    dependencyCount: 0,
+    technologyEvidenceCount: 0,
+    configurationFileCount: 0,
+    entryPointCandidateCount: 1,
+    documentationFileCount: 0,
+  });
+  assert.deepEqual(analysis.repositoryManifestIssues, []);
 });
 
 test("GitHub service exposes recursive tree truncation in the structure summary", async () => {

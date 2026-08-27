@@ -7,6 +7,7 @@ import {
 } from "./repository-content-retriever.js";
 import { filterRepositoryFiles } from "./repository-file-filter.js";
 import { prioritizeRepositoryFiles } from "./repository-file-prioritizer.js";
+import { buildRepositoryManifest } from "./repository-manifest-builder.js";
 
 export class GitHubRepositoryNotFoundError extends Error {
   constructor() {
@@ -215,6 +216,11 @@ export function createGitHubService(options = {}) {
         throw error;
       }
 
+      const repositoryManifest = buildRepositoryManifest({
+        repository,
+        documents: retrievedContent.documents,
+      });
+
       return {
         repository,
         tree: entries,
@@ -225,6 +231,9 @@ export function createGitHubService(options = {}) {
         prioritizationSummary: prioritizedFiles.summary,
         repositoryDocuments: retrievedContent.documents,
         contentRetrievalSummary: retrievedContent.summary,
+        repositoryManifest: repositoryManifest.manifest,
+        repositoryManifestSummary: repositoryManifest.summary,
+        repositoryManifestIssues: repositoryManifest.issues,
         structure: {
           ...summarizeRepositoryTree(entries, truncated),
           candidateFileCount: filteredFiles.summary.candidateFiles,

@@ -66,6 +66,11 @@ const githubService = {
         { path: "internal-source.js", content: "private source" },
       ],
       contentRetrievalSummary: { requestedFiles: 1, retrievedFiles: 1 },
+      repositoryManifest: { dependencies: [{ package: "private-package" }] },
+      repositoryManifestSummary: { dependencyCount: 1 },
+      repositoryManifestIssues: [
+        { path: "private/package.json", type: "invalid-json" },
+      ],
     };
   },
 };
@@ -128,6 +133,9 @@ test("POST /api/repos/analyze returns repository metadata and its structure summ
   assert.equal("prioritizationSummary" in result.body, false);
   assert.equal("repositoryDocuments" in result.body, false);
   assert.equal("contentRetrievalSummary" in result.body, false);
+  assert.equal("repositoryManifest" in result.body, false);
+  assert.equal("repositoryManifestSummary" in result.body, false);
+  assert.equal("repositoryManifestIssues" in result.body, false);
 });
 
 test("POST /api/repos/analyze accepts a trailing slash", async () => {
