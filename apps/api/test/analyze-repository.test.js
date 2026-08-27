@@ -71,6 +71,12 @@ const githubService = {
       repositoryManifestIssues: [
         { path: "private/package.json", type: "invalid-json" },
       ],
+      aiContext: "private prompt context",
+      repositoryUnderstanding: { projectSummary: "private AI result" },
+      geminiAIContext: "private Gemini prompt context",
+      geminiRepositoryUnderstanding: {
+        projectSummary: "private Gemini result",
+      },
     };
   },
 };
@@ -136,6 +142,10 @@ test("POST /api/repos/analyze returns repository metadata and its structure summ
   assert.equal("repositoryManifest" in result.body, false);
   assert.equal("repositoryManifestSummary" in result.body, false);
   assert.equal("repositoryManifestIssues" in result.body, false);
+  assert.equal("aiContext" in result.body, false);
+  assert.equal("repositoryUnderstanding" in result.body, false);
+  assert.equal("geminiAIContext" in result.body, false);
+  assert.equal("geminiRepositoryUnderstanding" in result.body, false);
 });
 
 test("POST /api/repos/analyze accepts a trailing slash", async () => {
