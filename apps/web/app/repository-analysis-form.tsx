@@ -1,61 +1,38 @@
 "use client";
 
-import { FormEvent, useState } from "react";
+import { FormEvent, useRef, useState } from "react";
+
+import {
+  isRoadmapResponse,
+  RoadmapLanguage,
+  RoadmapResponse,
+} from "./roadmap-response";
 
 type FormValues = {
   repositoryUrl: string;
   interviewDate: string;
   studyTime: string;
-  language: "simple-english" | "malayalam";
+  language: RoadmapLanguage;
 };
 
 type FormErrors = Partial<Record<keyof FormValues, string>>;
 
-type RepositoryMetadata = {
-  owner: string;
-  name: string;
-  fullName: string;
-  description: string | null;
-  defaultBranch: string;
-  language: string | null;
-  stars: number;
-  forks: number;
-  openIssues: number;
-  visibility: string;
-  htmlUrl: string;
-};
-
-type RepositoryStructure = {
-  totalEntries: number;
-  fileCount: number;
-  directoryCount: number;
-  submoduleCount: number;
-  truncated: boolean;
-};
-
-type AnalysisFeedback =
-  | {
-      message: string;
-      type: "error";
-    }
-  | {
-      repository: RepositoryMetadata;
-      structure: RepositoryStructure;
-      type: "success";
-    };
-
-type AnalyzeResponse = {
-  error?: unknown;
-  repository?: unknown;
-  structure?: unknown;
+type RepositoryAnalysisFormProps = {
+  onRoadmapGenerated: (result: RoadmapResponse) => void;
 };
 
 const initialValues: FormValues = {
   repositoryUrl: "",
   interviewDate: "",
   studyTime: "",
-  language: "simple-english",
+  language: "english",
 };
+
+const loadingSteps = [
+  "Reading repository structure",
+  "Identifying important learning areas",
+  "Building your study plan",
+];
 
 const inputBaseClasses =
   "mt-2 min-h-12 w-full rounded-lg border bg-surface px-4 py-3 text-base text-text-primary outline-none transition placeholder:text-text-muted hover:border-border-strong focus:ring-4";
@@ -84,6 +61,7 @@ function isGitHubRepositoryUrl(value: string) {
 
 function validate(values: FormValues): FormErrors {
   const errors: FormErrors = {};
+  const dailyStudyMinutes = Number(values.studyTime);
 
   if (!values.repositoryUrl.trim()) {
     errors.repositoryUrl = "Enter a GitHub repository URL.";
@@ -100,62 +78,45 @@ function validate(values: FormValues): FormErrors {
 
   if (!values.studyTime) {
     errors.studyTime = "Choose your available study time.";
+  } else if (
+    !Number.isInteger(dailyStudyMinutes) ||
+    dailyStudyMinutes < 30 ||
+    dailyStudyMinutes > 480
+  ) {
+    errors.studyTime = "Choose between 30 minutes and 8 hours per day.";
   }
 
   return errors;
 }
 
-function isRepositoryMetadata(value: unknown): value is RepositoryMetadata {
-  if (!value || typeof value !== "object") {
-    return false;
+function getResponseError(status: number) {
+  if (status === 400) {
+    return "Check your repository URL and study preferences, then try again.";
   }
 
-  const repository = value as Partial<RepositoryMetadata>;
-
-  return (
-    typeof repository.owner === "string" &&
-    typeof repository.name === "string" &&
-    typeof repository.fullName === "string" &&
-    (typeof repository.description === "string" ||
-      repository.description === null) &&
-    typeof repository.defaultBranch === "string" &&
-    (typeof repository.language === "string" || repository.language === null) &&
-    typeof repository.stars === "number" &&
-    typeof repository.forks === "number" &&
-    typeof repository.openIssues === "number" &&
-    typeof repository.visibility === "string" &&
-    typeof repository.htmlUrl === "string"
-  );
-}
-
-function isRepositoryStructure(value: unknown): value is RepositoryStructure {
-  if (!value || typeof value !== "object") {
-    return false;
+  if (status === 404) {
+    return "We couldn't access that repository. Make sure it is public and the URL is correct.";
   }
 
-  const structure = value as Partial<RepositoryStructure>;
+  if (status === 503) {
+    return "Repository analysis is temporarily busy. Wait a moment and try again.";
+  }
 
-  return (
-    typeof structure.totalEntries === "number" &&
-    typeof structure.fileCount === "number" &&
-    typeof structure.directoryCount === "number" &&
-    typeof structure.submoduleCount === "number" &&
-    typeof structure.truncated === "boolean"
-  );
+  if (status >= 500) {
+    return "We couldn't create your roadmap right now. Please try again.";
+  }
+
+  return "We couldn't process that request. Check your details and try again.";
 }
 
-function formatCompactNumber(value: number) {
-  return new Intl.NumberFormat("en-US", {
-    maximumFractionDigits: 1,
-    notation: "compact",
-  }).format(value);
-}
-
-export function RepositoryAnalysisForm() {
+export function RepositoryAnalysisForm({
+  onRoadmapGenerated,
+}: RepositoryAnalysisFormProps) {
   const [values, setValues] = useState(initialValues);
   const [errors, setErrors] = useState<FormErrors>({});
-  const [feedback, setFeedback] = useState<AnalysisFeedback | null>(null);
+  const [requestError, setRequestError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const submissionInProgress = useRef(false);
 
   function updateField<Field extends keyof FormValues>(
     field: Field,
@@ -163,62 +124,60 @@ export function RepositoryAnalysisForm() {
   ) {
     setValues((currentValues) => ({ ...currentValues, [field]: value }));
     setErrors((currentErrors) => ({ ...currentErrors, [field]: undefined }));
-    setFeedback(null);
+    setRequestError(null);
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
+    if (submissionInProgress.current) {
+      return;
+    }
+
     const nextErrors = validate(values);
     setErrors(nextErrors);
 
     if (Object.keys(nextErrors).length > 0) {
-      setFeedback(null);
+      setRequestError(null);
       return;
     }
 
+    submissionInProgress.current = true;
     setIsSubmitting(true);
-    setFeedback(null);
+    setRequestError(null);
 
     try {
-      const response = await fetch("/api/repos/analyze", {
+      const response = await fetch("/api/roadmaps/generate", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ repoUrl: values.repositoryUrl.trim() }),
+        body: JSON.stringify({
+          repoUrl: values.repositoryUrl.trim(),
+          interviewDate: values.interviewDate,
+          dailyStudyMinutes: Number(values.studyTime),
+          language: values.language,
+        }),
       });
-      const result = (await response
-        .json()
-        .catch(() => ({}))) as AnalyzeResponse;
+      const result: unknown = await response.json().catch(() => null);
 
       if (!response.ok) {
-        throw new Error(
-          typeof result.error === "string"
-            ? result.error
-            : "The repository URL could not be analyzed.",
+        setRequestError(getResponseError(response.status));
+        return;
+      }
+
+      if (!isRoadmapResponse(result)) {
+        setRequestError(
+          "The roadmap service returned an unexpected response. Please try again.",
         );
+        return;
       }
 
-      if (
-        !isRepositoryMetadata(result.repository) ||
-        !isRepositoryStructure(result.structure)
-      ) {
-        throw new Error("The analysis service returned an unexpected response.");
-      }
-
-      setFeedback({
-        repository: result.repository,
-        structure: result.structure,
-        type: "success",
-      });
-    } catch (error) {
-      setFeedback({
-        message:
-          error instanceof Error
-            ? error.message
-            : "The analysis service could not be reached. Try again.",
-        type: "error",
-      });
+      onRoadmapGenerated(result);
+    } catch {
+      setRequestError(
+        "We couldn't reach the roadmap service. Check your connection and try again.",
+      );
     } finally {
+      submissionInProgress.current = false;
       setIsSubmitting(false);
     }
   }
@@ -329,11 +288,11 @@ export function RepositoryAnalysisForm() {
               value={values.studyTime}
             >
               <option value="">Select time</option>
-              <option value="30-minutes">30 minutes</option>
-              <option value="1-hour">1 hour</option>
-              <option value="90-minutes">1.5 hours</option>
-              <option value="2-hours">2 hours</option>
-              <option value="3-hours">3+ hours</option>
+              <option value="30">30 minutes</option>
+              <option value="60">1 hour</option>
+              <option value="90">1.5 hours</option>
+              <option value="120">2 hours</option>
+              <option value="180">3 hours</option>
             </select>
             {errors.studyTime ? (
               <p className="mt-2 text-sm text-danger" id="study-time-error">
@@ -349,7 +308,7 @@ export function RepositoryAnalysisForm() {
           </legend>
           <div className="mt-3 grid grid-cols-2 gap-3">
             {[
-              ["simple-english", "Simple English"],
+              ["english", "Simple English"],
               ["malayalam", "Malayalam"],
             ].map(([value, label]) => {
               const isSelected = values.language === value;
@@ -368,10 +327,7 @@ export function RepositoryAnalysisForm() {
                     className="sr-only"
                     name="language"
                     onChange={() =>
-                      updateField(
-                        "language",
-                        value as FormValues["language"],
-                      )
+                      updateField("language", value as RoadmapLanguage)
                     }
                     type="radio"
                     value={value}
@@ -389,78 +345,33 @@ export function RepositoryAnalysisForm() {
           disabled={isSubmitting}
           type="submit"
         >
-          {isSubmitting ? "Analyzing..." : "Analyze Repository"}
+          {isSubmitting ? "Creating roadmap..." : "Analyze Repository"}
         </button>
 
-        {feedback?.type === "success" ? (
+        {isSubmitting ? (
           <div
-            className="rounded-lg border border-success/20 bg-success-muted px-4 py-4 text-sm text-text-secondary"
+            aria-live="polite"
+            className="rounded-lg bg-surface-muted px-4 py-4"
             role="status"
           >
-            <p className="font-semibold text-success">
-              {feedback.repository.fullName}
+            <p className="font-medium text-text-primary">
+              Analyzing your repository and creating your learning roadmap...
             </p>
-            {feedback.repository.description ? (
-              <p className="mt-2 leading-6">
-                {feedback.repository.description}
-              </p>
-            ) : null}
-            <dl className="mt-4 grid grid-cols-2 gap-4">
-              {feedback.repository.language ? (
-                <div>
-                  <dt className="text-text-muted">Language</dt>
-                  <dd className="mt-1 font-medium text-text-primary">
-                    {feedback.repository.language}
-                  </dd>
-                </div>
-              ) : null}
-              <div>
-                <dt className="text-text-muted">Default branch</dt>
-                <dd className="mt-1 font-medium text-text-primary">
-                  {feedback.repository.defaultBranch}
-                </dd>
-              </div>
-              <div>
-                <dt className="text-text-muted">Stars</dt>
-                <dd className="mt-1 font-medium text-text-primary">
-                  {formatCompactNumber(feedback.repository.stars)}
-                </dd>
-              </div>
-            </dl>
-            <div className="mt-5 border-t border-success/20 pt-4">
-              <p className="font-medium text-text-primary">
-                Repository structure
-              </p>
-              <dl className="mt-3 grid grid-cols-2 gap-4">
-                <div>
-                  <dt className="text-text-muted">Files</dt>
-                  <dd className="mt-1 font-medium text-text-primary">
-                    {feedback.structure.fileCount.toLocaleString("en-US")}
-                  </dd>
-                </div>
-                <div>
-                  <dt className="text-text-muted">Directories</dt>
-                  <dd className="mt-1 font-medium text-text-primary">
-                    {feedback.structure.directoryCount.toLocaleString("en-US")}
-                  </dd>
-                </div>
-              </dl>
-              {feedback.structure.truncated ? (
-                <p className="mt-3 leading-6 text-text-secondary">
-                  GitHub returned a partial repository tree, so these counts may
-                  be incomplete.
-                </p>
-              ) : null}
-            </div>
+            <ul className="mt-3 list-disc space-y-1.5 pl-5 text-sm text-text-secondary">
+              {loadingSteps.map((step) => (
+                <li key={step}>{step}</li>
+              ))}
+            </ul>
           </div>
         ) : null}
 
-        {feedback?.type === "error" ? (
+        {requestError ? (
           <p
+            aria-live="assertive"
             className="rounded-lg border border-danger/20 bg-danger-muted px-4 py-3 text-sm leading-6 text-danger"
             role="alert"
           >
-            {feedback.message}
+            {requestError}
           </p>
         ) : null}
       </form>
