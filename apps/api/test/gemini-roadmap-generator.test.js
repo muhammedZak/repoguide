@@ -105,13 +105,82 @@ test("uses an injected Gemini client and structured roadmap schema", async () =>
   );
   assert.equal(requests[0].contents.includes("repositoryDocuments"), false);
   assert.equal(requests[0].contents.includes("repositoryManifest"), false);
-  assert.match(requests[0].contents, /Generate at most 1 study day objects/);
-  assert.match(requests[0].contents, /do not fill unused calendar days/);
-  assert.match(requests[0].contents, /fewer high-value modules/);
-  assert.match(requests[0].contents, /long interview window/);
-  assert.match(requests[0].contents, /Malayalam wording must also remain concise/);
+  assert.match(requests[0].contents, /HARD CONSTRAINTS:/);
+  assert.match(requests[0].contents, /Generate no more than 1 study-day objects/);
+  assert.match(requests[0].contents, /Each day must stay within dailyStudyMinutes/);
+  assert.match(
+    requests[0].contents,
+    /complete roadmap, including finalReview, must stay within totalAvailableMinutes/,
+  );
+  assert.match(requests[0].contents, /Use only supplied learning-topic IDs/);
+  assert.match(requests[0].contents, /prerequisites before dependent topics/);
+  assert.match(requests[0].contents, /Do not invent repository behavior/);
   assert.match(requests[0].contents, /"plannedDays":7/);
+  assert.match(requests[0].contents, /"totalAvailableMinutes":420/);
   assert.match(requests[0].contents, /"maxGeneratedStudyDays":1/);
+});
+
+test("uses capacity as a soft opportunity for grounded learning depth", async () => {
+  const requests = [];
+  const prioritizedUnderstanding = {
+    ...repositoryUnderstanding,
+    learningTopics: [
+      repositoryUnderstanding.learningTopics[0],
+      {
+        id: "peripheral-config",
+        title: "Peripheral Configuration",
+        description: "Review a secondary configuration path.",
+        importance: "low",
+        difficulty: "beginner",
+        evidencePaths: ["config.js"],
+        prerequisites: ["project-structure"],
+      },
+    ],
+    recommendedLearningOrder: ["project-structure", "peripheral-config"],
+    interviewFocus: [
+      {
+        topic: "Explain the repository's core execution flow",
+        reason: "It demonstrates understanding of core behavior.",
+        evidencePaths: ["README.md"],
+      },
+    ],
+  };
+  const generator = createGeminiRoadmapGenerator({
+    client: fakeClient(async (request) => {
+      requests.push(request);
+      return { text: JSON.stringify(validRoadmap()) };
+    }),
+    model: "test-model",
+  });
+
+  await generator.generateRoadmap({
+    repositoryUnderstanding: prioritizedUnderstanding,
+    planning: planning(),
+  });
+
+  const { contents } = requests[0];
+  assert.match(contents, /QUALITY OBJECTIVES:/);
+  assert.match(contents, /Treat totalAvailableMinutes as a useful study budget/);
+  assert.match(contents, /additional distinct, repository-grounded learning depth/);
+  assert.match(contents, /maximum, not a quota/);
+  assert.match(contents, /leave capacity unused/);
+  assert.match(contents, /Never add filler, repetition, speculative material/);
+  assert.match(contents, /high-importance learning topics/);
+  assert.match(contents, /repository core behavior/);
+  assert.match(contents, /materially represented in interviewFocus/);
+  assert.match(contents, /Under tight capacity, prioritize core behavior/);
+  assert.match(contents, /interview-relevant skills over peripheral material/);
+  assert.match(contents, /recommendedLearningOrder as sequencing guidance/);
+  assert.match(contents, /determine relative study depth and time/);
+  assert.match(contents, /Multiple modules may use the same learningTopicId/);
+  assert.match(contents, /genuinely distinct repository-grounded skills/);
+  assert.match(contents, /Do not create duplicate or merely reworded modules/);
+  assert.match(contents, /Concise wording does not mean minimizing total study minutes/);
+  assert.match(contents, /do not make the study plan artificially small/);
+  assert.match(contents, /"importance":"high"/);
+  assert.match(contents, /"importance":"low"/);
+  assert.match(contents, /"interviewFocus":\[/);
+  assert.match(contents, /Explain the repository's core execution flow/);
 });
 
 test("bounds generated study days by topics, calendar, and minimum-duration capacity", () => {
