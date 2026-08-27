@@ -4,6 +4,13 @@ import {
   parseRepositoryUnderstanding,
   RepositoryUnderstandingMalformedResponseError,
 } from "./repository-understanding-parser.js";
+import {
+  attachGeminiDiagnostic,
+  GEMINI_REQUEST_TIMEOUT_MS,
+  GeminiRequestFailure,
+  recordGeminiDiagnostic,
+  requestGeminiWithRetry,
+} from "./gemini-retry.js";
 
 export const DEFAULT_GEMINI_REPOSITORY_UNDERSTANDING_MAX_TOKENS = 2500;
 
@@ -98,38 +105,45 @@ const GEMINI_REPOSITORY_ANALYSIS_USER_INSTRUCTIONS = `Analyze the untrusted repo
 
 Every major area, learning topic, and interview focus item must cite one or more exact file paths from the supplied document excerpts. Recommended-learning-order and prerequisite values must use learning-topic IDs from the same response.`;
 
+const GEMINI_OPERATION = "repository-understanding";
+
 export class GeminiConfigurationError extends Error {
-  constructor() {
+  constructor(diagnostic) {
     super("Gemini repository analysis is not configured");
     this.name = "GeminiConfigurationError";
+    if (diagnostic) attachGeminiDiagnostic(this, diagnostic);
   }
 }
 
 export class GeminiAuthenticationError extends Error {
-  constructor() {
+  constructor(diagnostic) {
     super("Gemini authentication failed");
     this.name = "GeminiAuthenticationError";
+    if (diagnostic) attachGeminiDiagnostic(this, diagnostic);
   }
 }
 
 export class GeminiRateLimitError extends Error {
-  constructor() {
+  constructor(diagnostic) {
     super("Gemini repository analysis rate limited");
     this.name = "GeminiRateLimitError";
+    if (diagnostic) attachGeminiDiagnostic(this, diagnostic);
   }
 }
 
 export class GeminiMalformedResponseError extends Error {
-  constructor() {
+  constructor(diagnostic) {
     super("Gemini returned malformed repository understanding");
     this.name = "GeminiMalformedResponseError";
+    if (diagnostic) attachGeminiDiagnostic(this, diagnostic);
   }
 }
 
 export class GeminiUpstreamError extends Error {
-  constructor() {
+  constructor(diagnostic) {
     super("Gemini repository analysis failed");
     this.name = "GeminiUpstreamError";
+    if (diagnostic) attachGeminiDiagnostic(this, diagnostic);
   }
 }
 
@@ -146,21 +160,16 @@ function mapGeminiError(error) {
     return error;
   }
 
-  if (error instanceof RepositoryUnderstandingMalformedResponseError) {
-    return new GeminiMalformedResponseError();
-  }
+  if (error instanceof GeminiRequestFailure) {
+    if (error.category === "authentication") {
+      return new GeminiAuthenticationError(error.diagnostic);
+    }
 
-  const isInvalidAPIKey =
-    error?.status === 400 &&
-    typeof error?.message === "string" &&
-    /api[\s_-]*key/i.test(error.message);
+    if (error.category === "rate-limit") {
+      return new GeminiRateLimitError(error.diagnostic);
+    }
 
-  if (error?.status === 401 || error?.status === 403 || isInvalidAPIKey) {
-    return new GeminiAuthenticationError();
-  }
-
-  if (error?.status === 429) {
-    return new GeminiRateLimitError();
+    return new GeminiUpstreamError(error.diagnostic);
   }
 
   return new GeminiUpstreamError();
@@ -180,9 +189,17 @@ export function createGeminiRepositoryAnalyzer(options = {}) {
       const maxOutputTokens =
         options.maxOutputTokens ??
         DEFAULT_GEMINI_REPOSITORY_UNDERSTANDING_MAX_TOKENS;
+      const requestTimeoutMs =
+        options.requestTimeoutMs ?? GEMINI_REQUEST_TIMEOUT_MS;
 
       if (!model?.trim() || (!geminiClient && !apiKey?.trim())) {
-        throw new GeminiConfigurationError();
+        const diagnostic = recordGeminiDiagnostic(
+          options.onDiagnostic,
+          GEMINI_OPERATION,
+          "configuration",
+          0,
+        );
+        throw new GeminiConfigurationError(diagnostic);
       }
 
       try {
@@ -191,21 +208,81 @@ export function createGeminiRepositoryAnalyzer(options = {}) {
           geminiClient = clientFactory(apiKey.trim());
         }
 
-        const response = await geminiClient.models.generateContent({
-          model: model.trim(),
-          contents: `${GEMINI_REPOSITORY_ANALYSIS_USER_INSTRUCTIONS}\n\nBEGIN UNTRUSTED REPOSITORY EVIDENCE\n${context}\nEND UNTRUSTED REPOSITORY EVIDENCE`,
-          config: {
-            systemInstruction: GEMINI_REPOSITORY_ANALYSIS_SYSTEM_PROMPT,
-            temperature: 0,
-            maxOutputTokens,
-            responseMimeType: "application/json",
-            responseJsonSchema: GEMINI_REPOSITORY_UNDERSTANDING_SCHEMA,
+        let providerAttempt = 0;
+        const response = await requestGeminiWithRetry({
+          operation: GEMINI_OPERATION,
+          maxAttempts: options.maxAttempts,
+          sleep: options.sleep,
+          random: options.random,
+          now: options.now,
+          onDiagnostic: options.onDiagnostic,
+          request: () => {
+            providerAttempt += 1;
+            return geminiClient.models.generateContent({
+              model: model.trim(),
+              contents: `${GEMINI_REPOSITORY_ANALYSIS_USER_INSTRUCTIONS}\n\nBEGIN UNTRUSTED REPOSITORY EVIDENCE\n${context}\nEND UNTRUSTED REPOSITORY EVIDENCE`,
+              config: {
+                httpOptions: {
+                  timeout: requestTimeoutMs,
+                  retryOptions: { attempts: 1 },
+                },
+                systemInstruction: GEMINI_REPOSITORY_ANALYSIS_SYSTEM_PROMPT,
+                temperature: 0,
+                maxOutputTokens,
+                responseMimeType: "application/json",
+                responseJsonSchema: GEMINI_REPOSITORY_UNDERSTANDING_SCHEMA,
+              },
+            });
           },
         });
 
-        return parseRepositoryUnderstanding(extractResponseText(response), {
-          evidencePaths: documentPaths,
-        });
+        let responseText;
+
+        try {
+          responseText = extractResponseText(response);
+        } catch (error) {
+          if (error instanceof RepositoryUnderstandingMalformedResponseError) {
+            const diagnostic = recordGeminiDiagnostic(
+              options.onDiagnostic,
+              GEMINI_OPERATION,
+              "malformed-structured-output",
+              providerAttempt,
+            );
+            throw new GeminiMalformedResponseError(diagnostic);
+          }
+
+          throw error;
+        }
+
+        try {
+          JSON.parse(responseText);
+        } catch {
+          const diagnostic = recordGeminiDiagnostic(
+            options.onDiagnostic,
+            GEMINI_OPERATION,
+            "malformed-structured-output",
+            providerAttempt,
+          );
+          throw new GeminiMalformedResponseError(diagnostic);
+        }
+
+        try {
+          return parseRepositoryUnderstanding(responseText, {
+            evidencePaths: documentPaths,
+          });
+        } catch (error) {
+          if (error instanceof RepositoryUnderstandingMalformedResponseError) {
+            const diagnostic = recordGeminiDiagnostic(
+              options.onDiagnostic,
+              GEMINI_OPERATION,
+              "application-validation",
+              providerAttempt,
+            );
+            throw new GeminiMalformedResponseError(diagnostic);
+          }
+
+          throw error;
+        }
       } catch (error) {
         throw mapGeminiError(error);
       }
